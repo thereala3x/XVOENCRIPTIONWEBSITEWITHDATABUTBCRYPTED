@@ -821,13 +821,72 @@
             background: var(--twitter-blue-hover);
         }
 
+        /* Rainbow username animation */
+        @keyframes rainbowGlow {
+            0% { color: #ff0000; text-shadow: 0 0 10px #ff0000, 0 0 20px #ff0000; }
+            14% { color: #ff7f00; text-shadow: 0 0 10px #ff7f00, 0 0 20px #ff7f00; }
+            28% { color: #ffff00; text-shadow: 0 0 10px #ffff00, 0 0 20px #ffff00; }
+            42% { color: #00ff00; text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00; }
+            57% { color: #0000ff; text-shadow: 0 0 10px #0000ff, 0 0 20px #0000ff; }
+            71% { color: #4b0082; text-shadow: 0 0 10px #4b0082, 0 0 20px #4b0082; }
+            85% { color: #9400d3; text-shadow: 0 0 10px #9400d3, 0 0 20px #9400d3; }
+            100% { color: #ff0000; text-shadow: 0 0 10px #ff0000, 0 0 20px #ff0000; }
+        }
+
+        .rainbow-username {
+            animation: rainbowGlow 3s linear infinite;
+            font-weight: 800;
+        }
+
         /* Profile Page */
         .profile-banner {
             height: 200px;
             background: linear-gradient(90deg, var(--bg-secondary) 0%, rgba(29, 155, 240, 0.1) 50%, var(--bg-secondary) 100%);
-            background-size: 200% 100%;
-            animation: shimmer 3s infinite;
+            background-size: cover;
+            background-position: center;
             position: relative;
+        }
+
+        .profile-banner.has-image {
+            animation: none;
+        }
+
+        .profile-banner-edit {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            background: rgba(0, 0, 0, 0.75);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .profile-banner-edit:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+
+        .no-posts-message {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .no-posts-message i {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .no-posts-message h3 {
+            color: var(--text-primary);
+            margin-bottom: 8px;
         }
 
         .profile-info {
@@ -1183,6 +1242,21 @@
             .modal-header h2 {
                 font-size: 18px;
             }
+            
+            .data-export-modal {
+                padding: 12px;
+            }
+            
+            .data-export-modal .modal-body {
+                padding: 12px;
+            }
+            
+            .data-export-content {
+                font-size: 9px !important;
+                line-height: 1.3 !important;
+                padding: 10px !important;
+                word-break: break-all !important;
+            }
         }
 
         .emoji-item:hover {
@@ -1433,28 +1507,28 @@
         <main class="main-content">
             <div class="header" id="header">
                 <h2 id="headerTitle">Home</h2>
+                <button class="header-messages-btn" onclick="app.switchView('messages')" style="margin-left: auto; background: none; border: none; color: var(--text-primary); cursor: pointer; padding: 8px; border-radius: 50%; transition: background 0.2s;" title="Messages">
+                    <i class="far fa-envelope" style="font-size: 20px;"></i>
+                </button>
             </div>
             <div id="mainContent"></div>
         </main>
 
         <!-- Right Sidebar -->
         <aside class="right-sidebar">
-            <div class="trending">
+            <div class="search-box">
+                <div class="search-wrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" class="search-input" placeholder="Search Xvo" id="sidebarSearchInput" onclick="app.switchView('search')">
+                </div>
+            </div>
+            <div class="trending" id="trendingSidebar">
                 <div class="trending-header">What's happening</div>
-                <div class="trend-item">
-                    <div class="trend-category">Trending in Tech</div>
-                    <div class="trend-name">#WebDev</div>
-                    <div class="trend-count">28.5K posts</div>
-                </div>
-                <div class="trend-item">
-                    <div class="trend-category">Technology · Trending</div>
-                    <div class="trend-name">#AI</div>
-                    <div class="trend-count">118K posts</div>
-                </div>
-                <div class="trend-item">
-                    <div class="trend-category">Programming · Trending</div>
-                    <div class="trend-name">#OpenSource</div>
-                    <div class="trend-count">42.1K posts</div>
+                <div id="trendingContent">
+                    <div class="trend-item">
+                        <div class="trend-category">Loading...</div>
+                        <div class="trend-name">Fetching trends</div>
+                    </div>
                 </div>
             </div>
         </aside>
