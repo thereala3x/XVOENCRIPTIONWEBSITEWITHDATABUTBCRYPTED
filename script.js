@@ -346,7 +346,14 @@ class Database {
     }
 
     getStories() {
-        return JSON.parse(localStorage.getItem('xvo_stories') || '[]');
+        const stories = JSON.parse(localStorage.getItem('xvo_stories') || '[]');
+        const now = Date.now();
+        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+        const validStories = stories.filter(s => (now - s.timestamp) < TWENTY_FOUR_HOURS);
+        if (validStories.length !== stories.length) {
+            localStorage.setItem('xvo_stories', JSON.stringify(validStories));
+        }
+        return validStories;
     }
 
     addStory(story) {
@@ -495,6 +502,54 @@ class App {
         this.switchView('home');
         this.updateNotificationBadge();
         this.checkMemoryLane();
+        this.updateTrendingSidebar();
+        this.cleanupOldThoughts();
+    }
+
+    cleanupOldThoughts() {
+        const confessions = this.db.getConfessions();
+        const now = Date.now();
+        const twentyFourHours = 24 * 60 * 60 * 1000;
+        const filtered = confessions.filter(c => (now - c.timestamp) < twentyFourHours);
+        if (filtered.length !== confessions.length) {
+            localStorage.setItem('xvo_confessions', JSON.stringify(filtered));
+        }
+    }
+
+    updateTrendingSidebar() {
+        const container = document.getElementById('trendingContent');
+        if (!container) return;
+
+        const posts = this.db.getPosts();
+        const wordCounts = {};
+        const stopWords = ['the', 'a', 'an', 'is', 'are', 'was', 'were', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or', 'but', 'it', 'this', 'that', 'i', 'you', 'he', 'she', 'we', 'they', 'my', 'your', 'his', 'her', 'its', 'our', 'their', 'with', 'from', 'by', 'about', 'as', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'just', 'now', 'then', 'so', 'if', 'when', 'what', 'who', 'how', 'why', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'than', 'too', 'very', 'im', 'am', 'been', 'being', 'get', 'got', 'getting', 'let', 'me', 'out', 'up', 'down', 'here', 'there', 'where', 'which'];
+
+        posts.forEach(post => {
+            const words = post.text.toLowerCase().replace(/[^a-zA-Z0-9#\s]/g, '').split(/\s+/);
+            words.forEach(word => {
+                if (word.length > 2 && !stopWords.includes(word.replace('#', ''))) {
+                    wordCounts[word] = (wordCounts[word] || 0) + 1;
+                }
+            });
+        });
+
+        const trending = Object.entries(wordCounts)
+            .filter(([word, count]) => count >= 2)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+
+        if (trending.length === 0) {
+            container.innerHTML = '<div class="trend-item"><div class="trend-category">No trends yet</div><div class="trend-name">Start posting!</div></div>';
+            return;
+        }
+
+        container.innerHTML = trending.map(([word, count], index) => `
+            <div class="trend-item" onclick="app.switchView('search', '${word}')" style="cursor: pointer;">
+                <div class="trend-category">${index + 1} · Trending</div>
+                <div class="trend-name">${word.startsWith('#') ? word : '#' + word}</div>
+                <div class="trend-count">${count} posts</div>
+            </div>
+        `).join('');
     }
 
     addAdminNavIfNeeded() {
@@ -817,6 +872,127 @@ class App {
         return '';
     }
 
+    getDisplayName(user) {
+        if (!user) return '';
+        if (user.hasRainbowName) {
+            return `<span class="rainbow-username">${user.displayName}</span>`;
+        }
+        return user.displayName;
+    }
+
+    sharePost(postId, username) {
+        const baseUrl = window.location.origin;
+        const shareUrl = `${baseUrl}/${username}/${postId}`;
+        
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                Toast.success('Link copied to clipboard!');
+            }).catch(() => {
+                this.showShareModal(shareUrl);
+            });
+        } else {
+            this.showShareModal(shareUrl);
+        }
+    }
+
+    showShareModal(url) {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'shareModal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 400px;">
+                <div class="modal-header">
+                    <button class="modal-close" onclick="document.getElementById('shareModal').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <h3 class="modal-title">Share Post</h3>
+                </div>
+                <div class="modal-body">
+                    <input type="text" value="${url}" readonly style="width: 100%; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); font-size: 14px;" onclick="this.select()">
+                    <button class="submit-btn" style="margin-top: 12px;" onclick="navigator.clipboard.writeText('${url}'); Toast.success('Copied!'); document.getElementById('shareModal').remove();">Copy Link</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    showFollowingModal(userId) {
+        const user = this.db.getAccount(userId);
+        const following = user.following.map(id => this.db.getAccount(id)).filter(u => u);
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'followingModal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 400px; max-height: 70vh;">
+                <div class="modal-header">
+                    <button class="modal-close" onclick="document.getElementById('followingModal').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <h3 class="modal-title">Following</h3>
+                </div>
+                <div class="modal-body" style="overflow-y: auto;">
+                    ${following.length === 0 ? '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">Not following anyone yet</p>' : 
+                    following.map(u => `
+                        <div class="post" style="cursor: pointer; padding: 12px;" onclick="document.getElementById('followingModal').remove(); app.renderProfile(${u.id})">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <img src="${u.avatar}" class="user-avatar">
+                                <div>
+                                    <div style="font-weight: 700;">${this.getDisplayName(u)}${this.getBadgeHTML(u)}</div>
+                                    <div style="color: var(--text-secondary);">@${u.username}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    showFollowersModal(userId) {
+        const user = this.db.getAccount(userId);
+        const followers = user.followers.map(id => this.db.getAccount(id)).filter(u => u && u.id > 0);
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'followersModal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 400px; max-height: 70vh;">
+                <div class="modal-header">
+                    <button class="modal-close" onclick="document.getElementById('followersModal').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <h3 class="modal-title">Followers (${this.formatFollowerCount(user.followers.length)})</h3>
+                </div>
+                <div class="modal-body" style="overflow-y: auto;">
+                    ${followers.length === 0 ? '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">No followers yet</p>' : 
+                    followers.slice(0, 50).map(u => `
+                        <div class="post" style="cursor: pointer; padding: 12px;" onclick="document.getElementById('followersModal').remove(); app.renderProfile(${u.id})">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <img src="${u.avatar}" class="user-avatar">
+                                <div>
+                                    <div style="font-weight: 700;">${this.getDisplayName(u)}${this.getBadgeHTML(u)}</div>
+                                    <div style="color: var(--text-secondary);">@${u.username}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                    ${user.followers.length > 50 ? `<p style="color: var(--text-secondary); text-align: center; padding: 12px;">And ${this.formatFollowerCount(user.followers.length - 50)} more...</p>` : ''}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    getUserReposts(userId) {
+        const posts = this.db.getPosts();
+        return posts.filter(p => p.retweets && p.retweets.includes(userId));
+    }
+
     async renderHome() {
         const mainContent = document.getElementById('mainContent');
         const currentUser = this.db.getCurrentUser();
@@ -873,15 +1049,27 @@ class App {
         }
     }
 
-    renderFeed(containerId, posts = null) {
+    renderFeed(containerId, posts = null, showNoPostsMessage = false) {
         const container = document.getElementById(containerId);
         if (!container) return;
 
         const postsToRender = posts || this.db.getPosts();
         const currentUser = this.db.getCurrentUser();
 
+        if (postsToRender.length === 0 && showNoPostsMessage) {
+            container.innerHTML = `
+                <div class="no-posts-message">
+                    <i class="far fa-newspaper"></i>
+                    <h3>This user hasn't posted yet</h3>
+                    <p>When they post, their posts will show up here.</p>
+                </div>
+            `;
+            return;
+        }
+
         container.innerHTML = postsToRender.map(post => {
             const author = this.db.getAccount(post.userId);
+            if (!author) return '';
             const isLiked = post.likes.includes(currentUser.id);
             const isRetweeted = post.retweets.includes(currentUser.id);
             const isOwnPost = post.userId === currentUser.id;
@@ -892,7 +1080,7 @@ class App {
                         <img src="${author.avatar}" class="post-avatar" data-user-id="${author.id}">
                         <div class="post-content">
                             <div class="post-header">
-                                <span class="post-name" data-user-id="${author.id}">${author.displayName}${this.getBadgeHTML(author)}</span>
+                                <span class="post-name" data-user-id="${author.id}">${this.getDisplayName(author)}${this.getBadgeHTML(author)}</span>
                                 <span class="post-username">@${author.username}</span>
                                 <span class="post-dot">·</span>
                                 <span class="post-time">${this.formatTime(post.timestamp)}</span>
@@ -913,7 +1101,7 @@ class App {
                                     <i class="${isLiked ? 'fas' : 'far'} fa-heart"></i>
                                     <span>${this.formatFollowerCount(post.likes.length)}</span>
                                 </button>
-                                <button class="action-btn">
+                                <button class="action-btn" onclick="app.sharePost(${post.id}, '${author.username}')">
                                     <i class="fas fa-share"></i>
                                 </button>
                             </div>
@@ -1104,14 +1292,23 @@ class App {
                 <i class="fas fa-arrow-left"></i>
             </button>
             <div>
-                <h2>${user.displayName}</h2>
+                <h2>${this.getDisplayName(user)}</h2>
                 <div style="color: var(--text-secondary); font-size: 13px;">${userPosts.length} Posts</div>
             </div>
         `;
 
+        const bannerStyle = user.banner ? `background-image: url('${user.banner}');` : '';
+        const bannerClass = user.banner ? 'profile-banner has-image' : 'profile-banner';
+
         const mainContent = document.getElementById('mainContent');
         mainContent.innerHTML = `
-            <div class="profile-banner"></div>
+            <div class="${bannerClass}" style="${bannerStyle}">
+                ${isOwnProfile ? `
+                    <button class="profile-banner-edit" onclick="app.showBannerModal()">
+                        <i class="fas fa-camera"></i> Edit Banner
+                    </button>
+                ` : ''}
+            </div>
             <div class="profile-info">
                 <div style="position: relative;">
                     <img src="${user.avatar}" class="profile-avatar-large" id="profileAvatarImage">
@@ -1135,16 +1332,16 @@ class App {
                         </div>`
                     }
                 </div>
-                <div class="profile-name">${user.displayName}${this.getBadgeHTML(user)}</div>
+                <div class="profile-name">${this.getDisplayName(user)}${this.getBadgeHTML(user)}</div>
                 <div class="profile-username">@${user.username}${user.isSuspended ? ' <span style="color: var(--danger); font-weight: 700;">(SUSPENDED)</span>' : ''}</div>
                 ${this.getOnlineStatus(user)}
                 ${user.bio ? `<div class="profile-bio">${user.bio}</div>` : ''}
                 <div class="profile-stats">
-                    <div class="stat">
+                    <div class="stat" style="cursor: pointer;" onclick="app.showFollowingModal(${user.id})">
                         <span class="stat-value">${this.formatFollowerCount(user.following.length)}</span>
                         <span class="stat-label"> Following</span>
                     </div>
-                    <div class="stat">
+                    <div class="stat" style="cursor: pointer;" onclick="app.showFollowersModal(${user.id})">
                         <span class="stat-value">${this.formatFollowerCount(user.followers.length)}</span>
                         <span class="stat-label"> Followers</span>
                     </div>
@@ -1160,6 +1357,7 @@ class App {
             </div>
             <div class="profile-tabs">
                 <div class="profile-tab active" data-tab="posts">Posts</div>
+                <div class="profile-tab" data-tab="reposts">Reposts</div>
                 <div class="profile-tab" data-tab="stories">Stories</div>
             </div>
             <div id="profileTabContent">
@@ -1202,11 +1400,105 @@ class App {
                 tab.classList.add('active');
                 if (tab.dataset.tab === 'stories') {
                     this.renderProfileStories(userId);
+                } else if (tab.dataset.tab === 'reposts') {
+                    this.renderProfileReposts(userId);
                 } else {
                     this.renderProfilePosts(userId);
                 }
             });
         });
+    }
+
+    renderProfileReposts(userId) {
+        const reposts = this.getUserReposts(userId);
+        const content = document.getElementById('profileTabContent');
+        content.innerHTML = '<div id="repostsFeed" class="feed"></div>';
+        
+        if (reposts.length === 0) {
+            content.innerHTML = `
+                <div class="no-posts-message">
+                    <i class="fas fa-retweet"></i>
+                    <h3>No reposts yet</h3>
+                    <p>When this user reposts something, it will show up here.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        this.renderFeed('repostsFeed', reposts);
+    }
+
+    showBannerModal() {
+        const currentUser = this.db.getCurrentUser();
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'bannerModal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <button class="modal-close" onclick="document.getElementById('bannerModal').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <h3 class="modal-title">Edit Profile Banner</h3>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label">Banner Image URL</label>
+                        <input type="url" id="bannerUrlInput" class="form-input" placeholder="https://example.com/banner.jpg" value="${currentUser.banner || ''}">
+                        <p style="color: var(--text-secondary); font-size: 12px; margin-top: 8px;">Enter a direct link to an image, or upload one below</p>
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label">Or Upload Image</label>
+                        <input type="file" id="bannerFileInput" accept="image/*" style="display: block; width: 100%; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary);">
+                    </div>
+                    <div id="bannerUploadProgress"></div>
+                    <div style="display: flex; gap: 12px; margin-top: 20px;">
+                        ${currentUser.banner ? `<button class="submit-btn" style="flex: 1; background: var(--danger);" onclick="app.removeBanner()">Remove</button>` : ''}
+                        <button class="submit-btn" style="flex: 1;" onclick="app.saveBanner()">Save</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        document.getElementById('bannerFileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const progressDiv = document.getElementById('bannerUploadProgress');
+            progressDiv.innerHTML = '<p style="color: var(--twitter-blue);">Uploading...</p>';
+            
+            try {
+                const result = await this.db.uploadImage(file);
+                document.getElementById('bannerUrlInput').value = result.url;
+                progressDiv.innerHTML = '<p style="color: var(--success);">Upload complete!</p>';
+            } catch (error) {
+                progressDiv.innerHTML = '<p style="color: var(--danger);">Upload failed. Please try again.</p>';
+            }
+        });
+    }
+
+    async saveBanner() {
+        const url = document.getElementById('bannerUrlInput').value.trim();
+        const currentUser = this.db.getCurrentUser();
+        
+        currentUser.banner = url || null;
+        await this.db.updateAccount(currentUser);
+        
+        document.getElementById('bannerModal').remove();
+        Toast.success(url ? 'Banner updated!' : 'Banner removed!');
+        this.renderProfile(currentUser.id);
+    }
+
+    async removeBanner() {
+        const currentUser = this.db.getCurrentUser();
+        currentUser.banner = null;
+        await this.db.updateAccount(currentUser);
+        
+        document.getElementById('bannerModal').remove();
+        Toast.success('Banner removed!');
+        this.renderProfile(currentUser.id);
     }
 
     async toggleFollow(userId) {
@@ -1248,6 +1540,7 @@ class App {
                     <input type="text" class="search-input" placeholder="Search Xvo" id="searchInput" value="${query}">
                 </div>
                 <div id="searchResults"></div>
+                <div id="trendingSection"></div>
             </div>
         `;
 
@@ -1257,15 +1550,76 @@ class App {
 
         if (query) {
             this.performSearch(query);
+        } else {
+            this.renderTrendingContent();
+        }
+    }
+
+    renderTrendingContent() {
+        const trendingSection = document.getElementById('trendingSection');
+        if (!trendingSection) return;
+
+        const allPosts = this.db.getPosts();
+        const allUsers = this.db.getAccounts();
+
+        const trendingPosts = [...allPosts]
+            .sort((a, b) => (b.likes.length + b.retweets.length + b.comments.length) - (a.likes.length + a.retweets.length + a.comments.length))
+            .slice(0, 5);
+
+        const popularUsers = [...allUsers]
+            .filter(u => u.id > 0 && !u.isSuspended)
+            .sort((a, b) => b.followers.length - a.followers.length)
+            .slice(0, 5);
+
+        trendingSection.innerHTML = `
+            <div style="margin-bottom: 24px;">
+                <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fas fa-fire" style="color: #f91880;"></i>
+                    Popular Users
+                </h3>
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    ${popularUsers.map(user => `
+                        <div class="post" style="cursor: pointer; padding: 12px;" data-user-id="${user.id}">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <img src="${user.avatar}" class="user-avatar">
+                                <div style="flex: 1;">
+                                    <div style="font-weight: 700;">${this.getDisplayName(user)}${this.getBadgeHTML(user)}</div>
+                                    <div style="color: var(--text-secondary);">@${user.username}</div>
+                                    <div style="color: var(--text-secondary); font-size: 12px;">${this.formatFollowerCount(user.followers.length)} followers</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            ${trendingPosts.length > 0 ? `
+                <div>
+                    <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+                        <i class="fas fa-chart-line" style="color: var(--twitter-blue);"></i>
+                        Trending Posts
+                    </h3>
+                    <div id="trendingPosts"></div>
+                </div>
+            ` : ''}
+        `;
+
+        if (trendingPosts.length > 0) {
+            this.renderFeed('trendingPosts', trendingPosts);
         }
     }
 
     performSearch(query) {
         const resultsDiv = document.getElementById('searchResults');
+        const trendingSection = document.getElementById('trendingSection');
+        
         if (!query.trim()) {
-            resultsDiv.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 40px;">Search for people and posts</p>';
+            resultsDiv.innerHTML = '';
+            if (trendingSection) trendingSection.style.display = 'block';
+            this.renderTrendingContent();
             return;
         }
+        
+        if (trendingSection) trendingSection.style.display = 'none';
 
         const users = this.db.getAccounts().filter(u => 
             u.name.toLowerCase().includes(query.toLowerCase()) || 
@@ -1349,6 +1703,14 @@ class App {
                 case 'verification_denied':
                     icon = '<i class="fas fa-times-circle" style="color: var(--danger);"></i>';
                     text = 'denied your verification request';
+                    break;
+                case 'announcement':
+                    icon = '<i class="fas fa-bullhorn" style="color: #f59e0b;"></i>';
+                    text = `sent an announcement: "${notif.text}"`;
+                    break;
+                case 'message':
+                    icon = '<i class="fas fa-envelope" style="color: var(--twitter-blue);"></i>';
+                    text = 'sent you a message';
                     break;
             }
 
@@ -1803,15 +2165,15 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
         modal.className = 'modal';
         modal.style.display = 'flex';
         modal.innerHTML = `
-            <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-content data-export-modal" style="max-width: 800px; width: 95%;">
                 <div class="modal-header">
                     <button class="modal-close" onclick="this.closest('.modal').remove()">
                         <i class="fas fa-times"></i>
                     </button>
                     <h3 class="modal-title">My Data Export</h3>
                 </div>
-                <div class="modal-body">
-                    <pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.6; background: var(--bg-primary); padding: 20px; border-radius: 8px; color: var(--text-primary);">${dataInfo}</pre>
+                <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                    <pre class="data-export-content" style="white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.4; background: var(--bg-primary); padding: 16px; border-radius: 8px; color: var(--text-primary); overflow-x: auto;">${dataInfo}</pre>
                     <button class="submit-btn" onclick="
                         const text = this.previousElementSibling.textContent;
                         const blob = new Blob([text], {type: 'text/plain'});
@@ -1821,7 +2183,7 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
                         a.download = 'XVO_Data_Export_${new Date().toISOString().split('T')[0]}.txt';
                         a.click();
                         URL.revokeObjectURL(url);
-                    " style="margin-top: 16px; width: 100%;">
+                    " style="margin-top: 16px; width: 100%; padding: 14px;">
                         <i class="fas fa-download"></i> Download My Data
                     </button>
                 </div>
@@ -2459,26 +2821,27 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
                         <textarea placeholder="What's happening?" id="profileComposer"></textarea>
                     </div>
                     <div id="profileLocation"></div>
-                    <div id="profileImagePreview"></div>
+                    <div id="profileMediaPreview"></div>
                     <div id="profileUploadProgress"></div>
                     <div class="composer-actions">
                         <div class="composer-icons">
-                            <i class="far fa-image" data-action="upload-image" data-composer="profile"></i>
+                            <i class="far fa-image" data-action="upload-media" data-composer="profile" title="Upload image"></i>
+                            <i class="fas fa-video" data-action="upload-video" data-composer="profile" title="Upload video/GIF"></i>
                             <i class="fas fa-map-marker-alt" data-action="add-location" data-composer="profile"></i>
                             <i class="far fa-smile" data-action="add-emoji" data-composer="profile"></i>
                         </div>
                         <button class="post-submit" data-action="create-post" data-textarea-id="profileComposer">Post</button>
                     </div>
-                    <input type="file" id="profileImageUpload" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" style="display: none;">
+                    <input type="file" id="profileMediaUpload" accept="image/*,video/*,.gif" style="display: none;">
                 </div>
             ` : ''}
             <div id="profileFeed" class="feed"></div>
         `;
 
-        this.renderFeed('profileFeed', userPosts);
+        this.renderFeed('profileFeed', userPosts, !isOwnProfile);
 
         if (isOwnProfile) {
-            this.setupImageUploadListener('profile');
+            this.setupMediaUploadListener('profile');
         }
     }
 
@@ -2499,6 +2862,20 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
 
         mainContent.innerHTML = `
             <div style="padding: 20px; max-width: 900px; margin: 0 auto;">
+                
+                <!-- Admin Announcements Section -->
+                ${currentUser.username.toLowerCase() === 'alz' ? `
+                    <div style="background: var(--bg-secondary); border-radius: 16px; padding: 20px; margin-bottom: 20px;">
+                        <h3 style="margin-bottom: 16px; font-size: 20px; display: flex; align-items: center; gap: 12px;">
+                            <i class="fas fa-bullhorn" style="color: #f59e0b;"></i>
+                            Send Announcement
+                        </h3>
+                        <textarea id="announcementText" placeholder="Write an announcement to all users..." style="width: 100%; min-height: 80px; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-primary); font-family: inherit; resize: vertical;"></textarea>
+                        <button onclick="app.sendAnnouncement()" style="margin-top: 12px; background: linear-gradient(90deg, #f59e0b, #f97316); color: white; border: none; border-radius: 20px; padding: 10px 24px; font-weight: 700; cursor: pointer;">
+                            <i class="fas fa-paper-plane"></i> Send to All Users
+                        </button>
+                    </div>
+                ` : ''}
                 
                 ${verificationRequests.length > 0 ? `
                     <div style="background: var(--bg-secondary); border-radius: 16px; padding: 20px; margin-bottom: 20px;">
@@ -2584,9 +2961,13 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
                 <div style="background: var(--bg-secondary); border-radius: 16px; padding: 20px;">
                     <h3 style="margin-bottom: 16px; font-size: 20px; display: flex; align-items: center; gap: 12px;">
                         <i class="fas fa-users" style="color: var(--twitter-blue);"></i>
-                        All Users
+                        All Users (${allUsers.length})
                     </h3>
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div class="search-wrapper" style="margin-bottom: 16px;">
+                        <i class="fas fa-search search-icon"></i>
+                        <input type="text" class="search-input" placeholder="Search users by name or @username..." id="adminUserSearch" oninput="app.filterAdminUsers(this.value)">
+                    </div>
+                    <div id="adminUsersList" style="display: flex; flex-direction: column; gap: 12px;">
                         ${allUsers.map(user => `
                             <div style="padding: 16px; border: 1px solid var(--border-color); border-radius: 12px;">
                                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
@@ -2634,6 +3015,14 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
                                             <option value="gold">Gold Badge</option>
                                             ${user.badge ? '<option value="none">Remove Badge</option>' : ''}
                                         </select>
+                                        <div style="display: flex; gap: 8px; width: 100%; margin-top: 8px; flex-wrap: wrap;">
+                                            <button class="action-btn" onclick="app.toggleRainbow(${user.id})" style="background: ${user.hasRainbowName ? 'linear-gradient(90deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #9400d3)' : 'var(--bg-primary)'}; color: ${user.hasRainbowName ? 'white' : 'var(--text-primary)'}; padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border-color);">
+                                                <i class="fas fa-rainbow"></i> Rainbow
+                                            </button>
+                                            <button class="action-btn" onclick="app.viewUserIPs(${user.id}, '${user.username}')" style="background: var(--bg-primary); color: var(--text-primary); padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border-color);">
+                                                <i class="fas fa-globe"></i> IP Logs
+                                            </button>
+                                        </div>
                                         <div style="display: flex; gap: 8px; width: 100%; margin-top: 8px;">
                                             <input type="number" id="followers-${user.id}" placeholder="Add followers" style="flex: 1; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 20px; font-size: 14px;" min="1">
                                             <button class="action-btn" onclick="app.giveFollowers(${user.id})" style="background: var(--twitter-blue); color: white; padding: 8px 20px; border-radius: 20px; white-space: nowrap;">
@@ -2650,6 +3039,57 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
         `;
     }
 
+    filterAdminUsers(query) {
+        const allUsers = this.db.getAccounts();
+        const lowerQuery = query.toLowerCase().trim();
+        
+        const userCards = document.querySelectorAll('#adminUsersList > div');
+        
+        allUsers.forEach((user, index) => {
+            const card = userCards[index];
+            if (!card) return;
+            
+            const matchesName = user.displayName.toLowerCase().includes(lowerQuery);
+            const matchesUsername = user.username.toLowerCase().includes(lowerQuery);
+            
+            if (!lowerQuery || matchesName || matchesUsername) {
+                card.style.display = '';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+    }
+
+    async sendAnnouncement() {
+        const currentUser = this.db.getCurrentUser();
+
+        if (currentUser.username.toLowerCase() !== 'alz') {
+            Toast.error('Only Alz can send announcements');
+            return;
+        }
+
+        const text = document.getElementById('announcementText')?.value?.trim();
+        if (!text) {
+            Toast.error('Please write an announcement');
+            return;
+        }
+
+        const allUsers = this.db.getAccounts();
+        allUsers.forEach(user => {
+            if (user.id !== currentUser.id) {
+                this.db.addNotification({
+                    type: 'announcement',
+                    userId: user.id,
+                    fromUserId: currentUser.id,
+                    text: text
+                });
+            }
+        });
+
+        document.getElementById('announcementText').value = '';
+        Toast.success(`Announcement sent to ${allUsers.length - 1} users!`);
+    }
+
     async toggleSuspendUser(userId) {
         const currentUser = this.db.getCurrentUser();
 
@@ -2659,6 +3099,12 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
         }
 
         const user = this.db.getAccount(userId);
+        
+        if (user.username.toLowerCase() === 'alz') {
+            Toast.error('Cannot suspend the platform owner');
+            return;
+        }
+
         user.isSuspended = !user.isSuspended;
         await this.db.updateAccount(user);
 
@@ -2697,6 +3143,76 @@ Your privacy is our priority. XVO - Where Your Voice Matters.
 
         Toast.success(user.isAdmin ? 'Admin privileges granted' : 'Admin privileges revoked');
         this.renderAdminPanel();
+    }
+
+    async toggleRainbow(userId) {
+        const currentUser = this.db.getCurrentUser();
+
+        if (currentUser.username.toLowerCase() !== 'alz') {
+            Toast.error('Only Alz can toggle rainbow usernames');
+            return;
+        }
+
+        try {
+            const response = await fetch(`${this.db.apiUrl}/api/admin/toggle-rainbow`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ adminId: currentUser.id, userId })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                Toast.success(data.hasRainbowName ? 'Rainbow username enabled!' : 'Rainbow username disabled');
+                await this.db.init();
+                this.renderAdminPanel();
+            } else {
+                Toast.error(data.error || 'Failed to toggle rainbow');
+            }
+        } catch (error) {
+            Toast.error('Failed to toggle rainbow username');
+        }
+    }
+
+    async viewUserIPs(userId, username) {
+        const currentUser = this.db.getCurrentUser();
+
+        if (currentUser.username.toLowerCase() !== 'alz') {
+            Toast.error('Only Alz can view IP logs');
+            return;
+        }
+
+        try {
+            const response = await fetch(`${this.db.apiUrl}/api/admin/ip-logs/${userId}?adminId=${currentUser.id}`);
+            const logs = await response.json();
+
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.id = 'ipLogsModal';
+            modal.style.display = 'flex';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 600px; max-height: 70vh;">
+                    <div class="modal-header">
+                        <button class="modal-close" onclick="document.getElementById('ipLogsModal').remove()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                        <h3 class="modal-title">IP Logs for @${username}</h3>
+                    </div>
+                    <div class="modal-body" style="overflow-y: auto;">
+                        ${logs.length === 0 ? '<p style="color: var(--text-secondary); text-align: center;">No IP logs found</p>' :
+                        logs.map(log => `
+                            <div style="padding: 12px; border-bottom: 1px solid var(--border-color);">
+                                <div style="font-weight: 700; font-family: monospace;">${log.ip}</div>
+                                <div style="color: var(--text-secondary); font-size: 12px;">${new Date(log.timestamp).toLocaleString()}</div>
+                                <div style="color: var(--text-secondary); font-size: 11px; word-break: break-all;">${log.userAgent}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        } catch (error) {
+            Toast.error('Failed to fetch IP logs');
+        }
     }
 
     async approveVerification(userId) {
