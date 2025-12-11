@@ -12,6 +12,37 @@ const PORT = 5000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 const ENCRYPTION_KEY = process.env.MESSAGE_ENCRYPTION_KEY || 'xvo-secret-encryption-key-2024';
+const IP_LOG_FILE = path.join(__dirname, 'ip_logs.json');
+
+function logUserIP(userId, req) {
+    try {
+        const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+                   req.headers['x-real-ip'] || 
+                   req.connection?.remoteAddress || 
+                   req.socket?.remoteAddress ||
+                   'unknown';
+        
+        let logs = [];
+        if (fs.existsSync(IP_LOG_FILE)) {
+            logs = JSON.parse(fs.readFileSync(IP_LOG_FILE, 'utf8'));
+        }
+        
+        logs.push({
+            userId,
+            ip,
+            timestamp: Date.now(),
+            userAgent: req.headers['user-agent'] || 'unknown'
+        });
+        
+        if (logs.length > 10000) {
+            logs = logs.slice(-10000);
+        }
+        
+        fs.writeFileSync(IP_LOG_FILE, JSON.stringify(logs, null, 2));
+    } catch (error) {
+        console.log('IP logging error:', error.message);
+    }
+}
 
 function encryptMessage(text) {
     return CryptoJS.AES.encrypt(text, ENCRYPTION_KEY).toString();
@@ -201,6 +232,8 @@ app.post('/api/login', async (req, res) => {
         if (!isPasswordValid) {
             return res.status(401).json({ error: 'Invalid username or password' });
         }
+        
+        logUserIP(account.id, req);
         
         const sanitizedAccount = { ...account, password: 'hashed' };
         res.json(sanitizedAccount);
@@ -607,6 +640,54 @@ app.post('/api/admin/reset-username', async (req, res) => {
     } catch (error) {
         console.error('Error resetting username:', error);
         res.status(500).json({ error: 'Failed to reset username' });
+    }
+});
+
+app.post('/api/admin/toggle-rainbow', async (req, res) => {
+    try {
+        const { adminId, userId } = req.body;
+        const accounts = readJSON(ACCOUNTS_FILE);
+        
+        const admin = accounts.find(a => a.id === adminId);
+        if (!admin || admin.username.toLowerCase() !== 'alz') {
+            return res.status(403).json({ error: 'Unauthorized: Only Alz can toggle rainbow usernames' });
+        }
+        
+        const userIndex = accounts.findIndex(a => a.id === userId);
+        if (userIndex === -1) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        accounts[userIndex].hasRainbowName = !accounts[userIndex].hasRainbowName;
+        writeJSON(ACCOUNTS_FILE, accounts);
+        
+        res.json({ success: true, hasRainbowName: accounts[userIndex].hasRainbowName });
+    } catch (error) {
+        console.error('Error toggling rainbow:', error);
+        res.status(500).json({ error: 'Failed to toggle rainbow username' });
+    }
+});
+
+app.get('/api/admin/ip-logs/:userId', (req, res) => {
+    try {
+        const adminId = parseInt(req.query.adminId);
+        const userId = parseInt(req.params.userId);
+        const accounts = readJSON(ACCOUNTS_FILE);
+        
+        const admin = accounts.find(a => a.id === adminId);
+        if (!admin || admin.username.toLowerCase() !== 'alz') {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        
+        let logs = [];
+        if (fs.existsSync(IP_LOG_FILE)) {
+            logs = JSON.parse(fs.readFileSync(IP_LOG_FILE, 'utf8'));
+        }
+        
+        const userLogs = logs.filter(l => l.userId === userId).slice(-20);
+        res.json(userLogs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch IP logs' });
     }
 });
 
